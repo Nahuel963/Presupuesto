@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Presupuesto - NahuelTech</title>
+<style>
+/* ===== Estilos generales (pantalla) ===== */
+body { font-family: 'Segoe UI', Tahoma, sans-serif; background:#f5f7fa; margin:0; padding:0; color:#333; }
+header { background:#2d89ef; color:#fff; padding:20px; text-align:center; }
+main { max-width:900px; margin:20px auto; background:#fff; padding:20px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.1); }
+.servicio { background:#f0f4f8; margin:8px 0; padding:10px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; }
+button { background:#2d89ef; color:#fff; padding:10px 16px; border:none; border-radius:6px; cursor:pointer; margin-top:10px; }
+button:hover { background:#1b5fa7; }
+.total { font-weight:bold; text-align:right; padding:10px; background:#e8f4ff; }
+
+/* Recibo (oculto en pantalla normal) */
+.recibo { display:none; }
+.factura-datos { text-align:right; font-size:14px; color:#555; }
+.tabla-factura { width:100%; border-collapse:collapse; margin-top:16px; }
+.tabla-factura th, .tabla-factura td { border:1px solid #ddd; padding:10px; }
+.tabla-factura th { background:#f0f0f0; }
+.firma { margin-top:40px; text-align:right; font-style:italic; }
+
+/* ===== Impresión ===== */
+@media print {
+  @page { size: A4; margin: 10mm; } /* márgenes reales de hoja */
+
+  /* Esconde por completo lo que no va al PDF (NO ocupa espacio) */
+  header, main { display: none !important; }
+
+  /* Muestra SOLO el recibo, centrado, fijado a la página */
+  .recibo {
+    display: block !important;
+    position: fixed;      /* evita que el flujo anterior deje “hueco” */
+    top: 0; left: 0; right: 0;
+    margin: 0 auto;
+    width: calc(210mm - 20mm);     /* ancho A4 menos márgenes @page */
+    max-height: calc(297mm - 20mm);/* alto A4 menos márgenes @page */
+    box-sizing: border-box;
+    overflow: hidden;     /* por si algo se pasa sin escalar (backup) */
+    transform-origin: top center;
+    /* la escala real se setea desde JS en --scale */
+    transform: scale(var(--scale, 1));
+  }
+
+  /* Un poco más compacto en impresión */
+  .tabla-factura th, .tabla-factura td { padding: 6px; }
+  .recibo, .recibo * { font-size: 12px; line-height: 1.25; }
+
+  /* Evitar cortes de tabla y filas */
+  .tabla-factura,
+  .tabla-factura tr,
+  .tabla-factura td,
+  .tabla-factura th {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+</style>
+</head>
+<body>
+<header><h1>Presupuesto de Servicios Informáticos</h1></header>
+
+<main>
+  <h2>Seleccione los servicios</h2>
+  <div id="lista-servicios"></div>
+
+  <div class="total">Total: <span id="total">$0</span></div>
+  <button onclick="imprimirRecibo()">🖨 Imprimir / Descargar PDF</button>
+</main>
+
+<!-- FACTURA (solo impresión) -->
+<div class="recibo" id="recibo">
+  <div class="factura-datos">
+    <strong>NahuelTech Servicios Informáticos</strong><br>
+    Av. Corrientes 1234 - Corrientes Capital<br>
+    Tel: (379) 456-7890<br>
+    contacto@nahueltech.com
+  </div>
+
+  <h2 style="text-align:right;">Factura <span id="numeroFactura"></span></h2>
+  <p><em>Fecha:</em> <span id="fechaRecibo"></span></p>
+
+  <div id="listaRecibo"></div>
+
+  <div class="total">Total: <span id="totalRecibo"></span></div>
+
+  <div class="firma">
+    ___________________________<br>
+    Firma y Aclaración
+  </div>
+</div>
+
+<script>
+/* -------- Datos fuente -------- */
+const SERVICES = [
+  { id: 1, nombre: "Limpieza de hardware", precio: 10000 },
+  { id: 2, nombre: "Cambio de pasta térmica", precio: 8000 },
+  { id: 3, nombre: "Eliminación de virus y malware", precio: 10000 },
+  { id: 4, nombre: "Actualización de sistema operativo", precio: 15000 },
+  { id: 5, nombre: "Instalación de antivirus", precio: 10000 },
+  { id: 6, nombre: "Copia de seguridad (backup)", precio: 15000 },
+  { id: 7, nombre: "Configuración de firewall", precio: 8000 },
+];
+
+const fmt = new Intl.NumberFormat('es-AR');
+
+/* -------- Render dinámico de la lista -------- */
+const contenedor = document.getElementById('lista-servicios');
+contenedor.innerHTML = SERVICES.map(s => `
+  <div class="servicio">
+    <label>
+      <input type="checkbox" name="servicio" data-id="${s.id}" onchange="actualizarTotal()">
+      ${s.nombre}
+    </label>
+    <span>$${fmt.format(s.precio)}</span>
+  </div>
+`).join('');
+
+/* -------- Helpers -------- */
+function seleccionados() {
+  const ids = Array.from(document.querySelectorAll("input[name='servicio']:checked"))
+    .map(chk => Number(chk.dataset.id));
+  return SERVICES.filter(s => ids.includes(s.id));
+}
+
+function actualizarTotal() {
+  const total = seleccionados().reduce((acc, s) => acc + s.precio, 0);
+  document.getElementById("total").textContent = "$" + fmt.format(total);
+}
+
+/* Escala el recibo para que entre en UNA hoja A4 (restando márgenes) */
+function scaleReciboToOnePage() {
+  const recibo = document.getElementById('recibo');
+
+  // Conversión mm -> px (96 dpi / 25.4 mm)
+  const mmToPx = mm => mm * 96 / 25.4;
+
+  const pageHeightMm = 297;
+  const pageWidthMm  = 210;
+  const marginMm     = 10; // igual que @page margin
+  const usableHeightPx = mmToPx(pageHeightMm - marginMm*2); // alto útil
+  const usableWidthPx  = mmToPx(pageWidthMm  - marginMm*2); // ancho útil
+
+  // Ajustar ancho al útil y medir alto real
+  recibo.style.width = usableWidthPx + 'px';
+  recibo.style.setProperty('--scale', 1); // reset
+
+  // Medir alto actual
+  const h = recibo.scrollHeight;
+
+  // Si se pasa, escalar
+  if (h > usableHeightPx) {
+    const scale = usableHeightPx / h;
+    document.documentElement.style.setProperty('--scale', scale);
+  } else {
+    document.documentElement.style.setProperty('--scale', 1);
+  }
+}
+
+function imprimirRecibo() {
+  const items = seleccionados();
+  if (items.length === 0) {
+    alert("Seleccioná al menos un servicio antes de imprimir.");
+    return;
+  }
+
+  let filas = "<tr><th>Servicio</th><th>Precio</th></tr>";
+  const total = items.reduce((acc, s) => {
+    filas += `<tr><td>${s.nombre}</td><td>$${fmt.format(s.precio)}</td></tr>`;
+    return acc + s.precio;
+  }, 0);
+
+  const numero = Math.floor(Math.random() * 90000) + 10000;
+  const fecha = new Date().toLocaleDateString('es-AR');
+
+  document.getElementById("numeroFactura").textContent = "#00" + numero;
+  document.getElementById("fechaRecibo").textContent  = fecha;
+  document.getElementById("listaRecibo").innerHTML    =
+    `<table class="tabla-factura">${filas}</table>`;
+  document.getElementById("totalRecibo").textContent  = "$" + fmt.format(total);
+
+  const recibo = document.getElementById('recibo');
+  recibo.style.display = "block";
+
+  // Esperar a que el DOM acomode, escalar y luego imprimir
+  requestAnimationFrame(() => {
+    scaleReciboToOnePage();
+    setTimeout(() => {
+      window.print();
+      // Limpieza tras imprimir/cancelar
+      document.documentElement.style.setProperty('--scale', 1);
+      recibo.style.display = "none";
+    }, 60);
+  });
+}
+</script>
+</body>
+</html>
