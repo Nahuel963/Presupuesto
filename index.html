@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Presupuesto - NahuelTech</title>
+<style>
+/* ===== Estilos generales (pantalla) ===== */
+body { font-family: 'Segoe UI', Tahoma, sans-serif; background:#f5f7fa; margin:0; padding:0; color:#333; }
+header { background:#2d89ef; color:#fff; padding:20px; text-align:center; }
+main { max-width:900px; margin:20px auto; background:#fff; padding:20px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.1); }
+h2 { margin-top:0; }
+.section { margin-bottom:24px; }
+.fila { background:#f0f4f8; margin:8px 0; padding:10px; border-radius:6px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+
+button { background:#2d89ef; color:#fff; padding:10px 16px; border:none; border-radius:6px; cursor:pointer; margin-top:10px; }
+button:hover { background:#1b5fa7; }
+
+.total-box { font-weight:bold; text-align:right; padding:10px; background:#e8f4ff; border-radius:6px; }
+
+/* Panel (solo ganancia de productos) */
+.panel {
+  background:#eef6ff;
+  border:1px solid #d7e9ff;
+  padding:12px;
+  border-radius:8px;
+  margin:16px 0;
+}
+.panel h3 { margin:0 0 8px 0; }
+.row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.row input[type="number"] { width:120px; padding:8px; border:1px solid #c9d7ef; border-radius:6px; }
+.panel small { color:#555; }
+
+/* Inputs de cantidad (chicos, iguales para servicios y productos) */
+.fila input[type="number"] {
+  width: 90px;
+  padding: 6px;
+  font-size: 14px;
+  border: 1px solid #c9d7ef;
+  border-radius: 6px;
+  text-align: right;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+/* Recibo (oculto en pantalla normal) */
+.recibo { display:none; }
+.factura-datos { text-align:right; font-size:14px; color:#555; }
+.tabla-factura { width:100%; border-collapse:collapse; margin-top:16px; }
+.tabla-factura th, .tabla-factura td { border:1px solid #ddd; padding:10px; }
+.tabla-factura th { background:#f0f0f0; }
+.firma { margin-top:40px; text-align:right; font-style:italic; }
+
+/* ===== Impresión ===== */
+@media print {
+  @page { size: A4; margin: 10mm; }
+  header, main { display: none !important; }
+
+  .recibo {
+    display: block !important;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    margin: 0 auto;
+    width: calc(210mm - 20mm);
+    max-height: calc(297mm - 20mm);
+    box-sizing: border-box;
+    overflow: hidden;
+    transform-origin: top center;
+    transform: scale(var(--scale, 1));
+  }
+
+  .tabla-factura th, .tabla-factura td { padding: 6px; }
+  .recibo, .recibo * { font-size: 12px; line-height: 1.25; }
+
+  .tabla-factura, .tabla-factura tr, .tabla-factura td, .tabla-factura th {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+</style>
+</head>
+<body>
+<header><h1>Presupuesto de Servicios Informáticos</h1></header>
+
+<main>
+  <!-- Servicios (con cantidad) -->
+  <section class="section">
+    <h2>Servicios</h2>
+    <div id="lista-servicios"></div>
+  </section>
+
+  <!-- Productos (con cantidad) -->
+  <section class="section">
+    <h2>Productos</h2>
+    <div id="lista-productos"></div>
+
+    <!-- Ganancia sobre productos -->
+    <div class="panel">
+      <h3>Ganancia sobre productos (%)</h3>
+      <div class="row">
+        <label for="gananciaProductos">Porcentaje:</label>
+        <input type="number" id="gananciaProductos" min="0" max="1000" step="0.1" value="0" oninput="actualizarTotales()">
+        <small>Se aplica al <strong>precio unitario</strong> de cada producto. No se muestra como ajuste en el recibo.</small>
+      </div>
+    </div>
+  </section>
+
+  <!-- Resumen (pantalla) -->
+  <div class="total-box" id="resumen">
+    <div>Subtotal servicios: <span id="subServicios">$0</span></div>
+    <div>Subtotal productos (base): <span id="subProductos">$0</span></div>
+    <div>Total con ganancia: <span id="totalConGanancia">$0</span></div>
+  </div>
+
+  <button onclick="imprimirRecibo()">🖨 Imprimir / Descargar PDF</button>
+</main>
+
+<!-- FACTURA (solo impresión) -->
+<div class="recibo" id="recibo">
+  <div class="factura-datos">
+    <strong>NahuelTech Servicios Informáticos</strong><br>
+    Av. Corrientes 1234 - Corrientes Capital<br>
+    Tel: (379) 456-7890<br>
+    contacto@nahueltech.com
+  </div>
+
+  <h2 style="text-align:right;">Factura <span id="numeroFactura"></span></h2>
+  <p><em>Fecha:</em> <span id="fechaRecibo"></span></p>
+
+  <div id="listaRecibo"></div>
+
+  <table class="tabla-factura" id="resumenRecibo"></table>
+
+  <div class="firma">
+    ___________________________<br>
+    Firma y Aclaración
+  </div>
+</div>
+
+<script>
+/* -------- Datos fuente -------- */
+const SERVICES = [
+  { id: 1, nombre: "Limpieza de hardware", precio: 10000 },
+  { id: 2, nombre: "Cambio de pasta térmica", precio: 8000 },
+  { id: 3, nombre: "Eliminación de virus y malware", precio: 10000 },
+  { id: 4, nombre: "Actualización de sistema operativo", precio: 15000 },
+  { id: 5, nombre: "Instalación de antivirus", precio: 10000 },
+  { id: 6, nombre: "Copia de seguridad (backup 100 GB )", precio: 15000 },
+  { id: 7, nombre: "Configuración de firewall", precio: 8000 },
+];
+
+const PRODUCTS = [
+  { id: 101, nombre: "Disco SSD 480GB", precio: 60000 },
+  { id: 102, nombre: "Memoria RAM 8GB DDR4", precio: 25000 },
+  { id: 103, nombre: "Fuente 550W 80+ Bronze", precio: 100000 },
+  { id: 104, nombre: "Teclado USB", precio: 20000 },
+  { id: 105, nombre: "Mouse óptico USB", precio: 15000 },
+];
+
+const fmt = new Intl.NumberFormat('es-AR');
+
+/* -------- Render dinámico -------- */
+const contServicios = document.getElementById('lista-servicios');
+contServicios.innerHTML = SERVICES.map(s => `
+  <div class="fila">
+    <div style="flex:1 1 auto">${s.nombre}</div>
+    <div>$${fmt.format(s.precio)}</div>
+    <div>
+      <label>Cant.:
+        <input type="number" min="0" step="1" value="0" data-type="serv" data-id="${s.id}" oninput="actualizarTotales()">
+      </label>
+    </div>
+  </div>
+`).join('');
+
+const contProductos = document.getElementById('lista-productos');
+contProductos.innerHTML = PRODUCTS.map(p => `
+  <div class="fila">
+    <div style="flex:1 1 auto">${p.nombre}</div>
+    <div>$${fmt.format(p.precio)}</div>
+    <div>
+      <label>Cant.:
+        <input type="number" min="0" step="1" value="0" data-type="prod" data-id="${p.id}" oninput="actualizarTotales()">
+      </label>
+    </div>
+  </div>
+`).join('');
+
+/* -------- Helpers -------- */
+function leerCantidades(tipo) {
+  const sel = Array.from(document.querySelectorAll(`input[data-type='${tipo}']`))
+    .map(inp => ({ id: Number(inp.dataset.id), qty: parseInt(inp.value || '0', 10) }))
+    .filter(x => x.qty > 0);
+  return sel;
+}
+
+function valPct(id) {
+  const el = document.getElementById(id);
+  const v = parseFloat(el.value);
+  return isNaN(v) || v < 0 ? 0 : v;
+}
+
+/* -------- Totales (servicios con cantidad; productos con % por unidad) -------- */
+function actualizarTotales() {
+  const servSel = leerCantidades('serv');
+  const prodSel = leerCantidades('prod');
+  const pctProd = valPct('gananciaProductos');
+
+  // Servicios: precio base * cantidad
+  const subServicios = servSel.reduce((acc, s) => {
+    const data = SERVICES.find(x => x.id === s.id);
+    return acc + data.precio * s.qty;
+  }, 0);
+
+  // Productos base (para mostrar en panel)
+  const subProductosBase = prodSel.reduce((acc, p) => {
+    const data = PRODUCTS.find(x => x.id === p.id);
+    return acc + data.precio * p.qty;
+  }, 0);
+
+  // Productos FINAL: (precio base * (1 + %)) * cantidad
+  const totalProductosFinal = prodSel.reduce((acc, p) => {
+    const data = PRODUCTS.find(x => x.id === p.id);
+    const unitFinal = data.precio * (1 + pctProd / 100);
+    return acc + Math.round(unitFinal) * p.qty;
+  }, 0);
+
+  const total = subServicios + totalProductosFinal;
+
+  document.getElementById('subServicios').textContent = "$" + fmt.format(subServicios);
+  document.getElementById('subProductos').textContent = "$" + fmt.format(subProductosBase);
+  document.getElementById('totalConGanancia').textContent = "$" + fmt.format(total);
+}
+
+/* -------- Impresión -------- */
+function mmToPx(mm) { return mm * 96 / 25.4; }
+function scaleReciboToOnePage() {
+  const recibo = document.getElementById('recibo');
+  const usableHeightPx = mmToPx(297 - 10*2);
+  const usableWidthPx  = mmToPx(210 - 10*2);
+  recibo.style.width = usableWidthPx + 'px';
+  recibo.style.setProperty('--scale', 1);
+  const h = recibo.scrollHeight;
+  document.documentElement.style.setProperty('--scale', h > usableHeightPx ? usableHeightPx / h : 1);
+}
+
+function imprimirRecibo() {
+  const servSel = leerCantidades('serv');
+  const prodSel = leerCantidades('prod');
+  const pctProd = valPct('gananciaProductos');
+
+  if (servSel.length === 0 && prodSel.length === 0) {
+    alert("Seleccioná al menos un servicio o un producto (cantidad > 0).");
+    return;
+  }
+
+  // Subtotales y total final
+  const subServicios = servSel.reduce((acc, s) => {
+    const data = SERVICES.find(x => x.id === s.id);
+    return acc + data.precio * s.qty;
+  }, 0);
+
+  const totalProductosFinal = prodSel.reduce((acc, p) => {
+    const data = PRODUCTS.find(x => x.id === p.id);
+    const unitFinal = Math.round(data.precio * (1 + pctProd / 100));
+    return acc + unitFinal * p.qty;
+  }, 0);
+
+  const totalFinal = subServicios + totalProductosFinal;
+
+  // Tabla de ítems
+  let filas = "<tr><th>Descripción</th><th>Detalle</th><th>Importe</th></tr>";
+
+  // Servicios: mostrar c/u base y total por línea
+  servSel.forEach(s => {
+    const data = SERVICES.find(x => x.id === s.id);
+    const line = data.precio * s.qty;
+    filas += `<tr><td>Servicio</td><td>${data.nombre} &times; ${s.qty} ($${fmt.format(data.precio)} c/u)</td><td>$${fmt.format(line)}</td></tr>`;
+  });
+
+  // Productos: mostrar c/u FINAL (con %) y total por línea
+  prodSel.forEach(p => {
+    const data = PRODUCTS.find(x => x.id === p.id);
+    const unitFinal = Math.round(data.precio * (1 + pctProd / 100));
+    const line = unitFinal * p.qty;
+    filas += `<tr><td>Producto</td><td>${data.nombre} &times; ${p.qty} ($${fmt.format(unitFinal)} c/u)</td><td>$${fmt.format(line)}</td></tr>`;
+  });
+
+  const numero = Math.floor(Math.random() * 90000) + 10000;
+  const fecha = new Date().toLocaleDateString('es-AR');
+
+  document.getElementById("numeroFactura").textContent = "#00" + numero;
+  document.getElementById("fechaRecibo").textContent  = fecha;
+  document.getElementById("listaRecibo").innerHTML    =
+    `<table class="tabla-factura">${filas}</table>`;
+
+  // Resumen
+  const resumenHTML = `
+    <tr><th colspan="2">Resumen</th><th>Importe</th></tr>
+    <tr><td colspan="2">Subtotal servicios</td><td>$${fmt.format(subServicios)}</td></tr>
+    <tr><td colspan="2">Subtotal productos (final)</td><td>$${fmt.format(totalProductosFinal)}</td></tr>
+    <tr><td colspan="2"><strong>Total</strong></td><td><strong>$${fmt.format(totalFinal)}</strong></td></tr>
+  `;
+  document.getElementById("resumenRecibo").innerHTML = resumenHTML;
+
+  const recibo = document.getElementById('recibo');
+  recibo.style.display = "block";
+
+  requestAnimationFrame(() => {
+    scaleReciboToOnePage();
+    setTimeout(() => {
+      window.print();
+      document.documentElement.style.setProperty('--scale', 1);
+      recibo.style.display = "none";
+    }, 60);
+  });
+}
+
+// Inicializar
+actualizarTotales();
+</script>
+</body>
+</html>
